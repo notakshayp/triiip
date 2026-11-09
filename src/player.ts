@@ -7,7 +7,7 @@ import type { FollowCamera } from './camera'
 
 export type PlayerMode = 'move' | 'sitting' | 'swimming'
 
-const SPEED = 4.2 // trot
+const SPEED = 3.0 // a brisk cat trot (stride/cadence look right at this pace)
 const SPRINT = 7.6 // gallop (Shift)
 const ACCEL = 14
 const DECEL = 18
@@ -69,6 +69,8 @@ export class Player {
     private onDust: (x: number, y: number, z: number, n: number) => void,
   ) {
     this.pos.y = this.floorAt(this.pos.x, this.pos.z, this.pos.y)
+    // The cat plants its paws on whatever is underfoot (ground, rocks, logs).
+    this.character.ground = (x, z) => this.floorAt(x, z, this.pos.y + 0.4)
   }
 
   /** Highest walkable surface under (x, z) at or below `feetY` + snap. */
@@ -143,12 +145,13 @@ export class Player {
    * this, frames with 0 or 2 steps made the cat jump sideways on screen
    * whenever it moved across the view (diagonals shook).
    */
-  interpolate(alpha: number): void {
+  interpolate(alpha: number, frameDt: number): void {
     this.renderPos.lerpVectors(this.prevPos, this.pos, alpha)
     let d = this.facing - this.prevFacing
     d = Math.atan2(Math.sin(d), Math.cos(d))
     this.character.group.position.copy(this.renderPos)
     this.character.group.rotation.y = this.prevFacing + d * alpha
+    this.poseCharacter(frameDt)
   }
 
   /** Toggle sitting. Called once per sit keypress (edge-triggered). */
@@ -368,9 +371,17 @@ export class Player {
     this.updateCharacter(dt)
   }
 
-  private updateCharacter(dt: number): void {
+  private updateCharacter(_dt: number): void {
     this.character.group.position.copy(this.pos)
     this.character.group.rotation.y = this.facing
+  }
+
+  /**
+   * Pose the cat for this rendered frame (after interpolate placed it). Runs
+   * per frame, not per physics step: planted paws are locked in the world,
+   * so the pose must be solved where the body is actually drawn.
+   */
+  private poseCharacter(dt: number): void {
     // Slope under the body along the facing (for the body's pitch).
     const fx = Math.sin(this.facing) * 0.35
     const fz = Math.cos(this.facing) * 0.35

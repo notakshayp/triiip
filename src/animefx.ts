@@ -16,6 +16,10 @@ import { WaterPass, type GhibliWater } from './water'
 // depth buffer), strength cycles: 1 subtle → 2 washed → 0 raw.
 // ---------------------------------------------------------------------------
 
+const _sunP = new THREE.Vector3()
+const _sunN = new THREE.Vector3()
+const _camDir = new THREE.Vector3()
+
 const AnimeShader = {
   uniforms: {
     tDiffuse: { value: null },
@@ -35,6 +39,9 @@ const AnimeShader = {
     uTime: { value: 0 },
     tNoise: { value: null as THREE.Texture | null },
     uCloudCover: { value: 0.5 },
+    uSunUV: { value: new THREE.Vector2(0.5, 0.5) },
+    uSunOn: { value: 0 },
+    uAspect: { value: 1 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -61,6 +68,9 @@ const AnimeShader = {
     uniform float uTime;
     uniform sampler2D tNoise;
     uniform float uCloudCover;
+    uniform vec2 uSunUV;  // the sun on screen
+    uniform float uSunOn; // 0 when it's behind you / set
+    uniform float uAspect;
     varying vec2 vUv;
 
     #define saturate(x) clamp(x, 0.0, 1.0)
@@ -85,6 +95,25 @@ const AnimeShader = {
       vec3 col = src.rgb;
       float s = uStrength;
 
+      // -- Soft focus ("diffusion"): bright areas bleed a soft halo into
+      // their surroundings — sky glowing through leaves, sunlit edges — the
+      // haze anime films add in compositing. The same taps soften the far
+      // distance a touch, which reads as air.
+      vec3 blur = vec3(0.0);
+      if (s > 0.0) {
+        vec2 px = 1.0 / resolution;
+        float dC = texture2D(tDepth, vUv).x;
+        float far = smoothstep(110.0, 420.0, linearDepth(vUv)) * (1.0 - step(0.99999, dC));
+        float r = mix(3.5, 5.5, far);
+        for (int i = 0; i < 8; i++) {
+          float a = float(i) * 0.7854 + 0.39;
+          blur += texture2D(tDiffuse, vUv + vec2(cos(a), sin(a)) * r * px).rgb;
+        }
+        blur *= 0.125;
+        col += max(blur - 0.55, 0.0) * 0.55 * s;
+        col = mix(col, blur, far * 0.35 * s);
+      }
+
       if (s > 0.0) {
         float d = linearDepth(vUv);
 
@@ -105,9 +134,10 @@ const AnimeShader = {
         // -- Dreamy grade. No posterising (that was the colour banding):
         // pastel saturation, lifted lilac-blue shadows, warm highlights.
         float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-        col = mix(vec3(lum), col, 1.1);
-        col = col * 0.95 + vec3(0.016, 0.02, 0.034);
-        col *= mix(vec3(1.02, 1.03, 0.98), vec3(1.06, 1.02, 0.94), smoothstep(0.3, 1.2, lum));
+        col = mix(vec3(lum), col, 1.18);
+        col = col * 0.95 + vec3(0.018, 0.02, 0.036);
+        // Split toning: lavender-blue shade, peach-gold light.
+        col *= mix(vec3(0.95, 0.97, 1.08), vec3(1.07, 1.02, 0.93), smoothstep(0.15, 0.9, lum));
       }
 
       // -- Volumetric ground haze (world-space height fog).
@@ -135,6 +165,28 @@ const AnimeShader = {
           // Sky-melting horizon blend so terrain fades into the sky colour.
           vec3 haze = mix(uFogColor, uSunColor * 0.85, 0.18);
           col = mix(col, haze, saturate(row * s * 0.9));
+        }
+
+        // -- Light shafts: march from each pixel toward the sun on screen,
+        // counting open sky along the way — trees and hills cut the light
+        // into beams streaming out of the sun.
+        if (uSunOn > 0.0) {
+          vec2 toSun = uSunUV - vUv;
+          vec2 stepUv = toSun / 28.0;
+          vec2 uvR = vUv;
+          float decay = 1.0;
+          float shafts = 0.0;
+          for (int i = 0; i < 28; i++) {
+            uvR += stepUv;
+            if (any(lessThan(uvR, vec2(0.0))) || any(greaterThan(uvR, vec2(1.0)))) break;
+            shafts += step(0.99999, texture2D(tDepth, uvR).x) * decay;
+            decay *= 0.93;
+          }
+          shafts /= 13.0;
+          float fall = exp(-length(toSun * vec2(uAspect, 1.0)) * 1.8);
+          // Only where something is in the way does a shaft read as a beam.
+          float onSky = step(0.99999, texture2D(tDepth, vUv).x);
+          col += uSunColor * shafts * fall * mix(0.32, 0.1, onSky) * uSunOn * s * (1.0 - uCloudCover * 0.7);
         }
 
         // -- Sun-ray haze: cheap directional bloom toward the sun.
@@ -245,6 +297,15 @@ export class AnimeFx {
     ;(u.uInvProj.value as THREE.Matrix4).copy(this.camera.projectionMatrixInverse)
     ;(u.uCamWorld.value as THREE.Matrix4).copy(this.camera.matrixWorld)
     ;(u.uCamPos.value as THREE.Vector3).setFromMatrixPosition(this.camera.matrixWorld)
+    // Sun on screen, for the light shafts (faded out when it's behind you,
+    // far off screen, or below the horizon).
+    _sunP.copy(u.uCamPos.value as THREE.Vector3).addScaledVector(sunDir, 500).project(this.camera)
+    this.camera.getWorldDirection(_camDir)
+    const facing = _camDir.dot(_sunN.copy(sunDir).normalize())
+    ;(u.uSunUV.value as THREE.Vector2).set(_sunP.x * 0.5 + 0.5, _sunP.y * 0.5 + 0.5)
+    const off = Math.max(Math.abs(_sunP.x), Math.abs(_sunP.y))
+    ;(u.uSunOn.value as number) = THREE.MathUtils.smoothstep(facing, 0.1, 0.45) * (1 - THREE.MathUtils.smoothstep(off, 1.3, 2.2)) * THREE.MathUtils.smoothstep(_sunN.y, -0.02, 0.08)
+    ;(u.uAspect.value as number) = this.camera.aspect
     // Always through the composer (the water pass lives there); strength 0
     // just turns the grade/haze off in the shader.
     // The scene must render into rt (the target that owns the depth texture

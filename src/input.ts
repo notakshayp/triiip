@@ -23,6 +23,7 @@ export class Input {
   }
 
   private onKey(e: KeyboardEvent, down: boolean): void {
+    if (down && isTyping(e)) return
     const k = e.key.toLowerCase()
     // Prevent page scroll on game keys.
     if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault()
@@ -177,4 +178,10 @@ export class Input {
       this.viewQueued = true
     })
   }
+}
+
+/** True while a key goes to a text field (e.g. the Spotify client ID), not the game. */
+export function isTyping(e: Event): boolean {
+  const t = e.target
+  return (t instanceof HTMLInputElement && t.type === 'text') || t instanceof HTMLTextAreaElement
 }

@@ -11,6 +11,9 @@ import { Sfx } from './sfx'
 import { WATER_Y } from './water'
 import { AnimeFx } from './animefx'
 import { biomeAt, findBiome, type Biome } from './terrain'
+import { Spotify } from './spotify'
+import { mountMusic } from './music-ui'
+import { isTyping } from './input'
 
 // ----------------------------------------------------------------------------
 // Boot: renderer (WebGL2, no stencil, high-performance), fixed-step loop.
@@ -191,7 +194,9 @@ let accFps = 0
 }
 
 // --- SFX: unlock on first gesture, stride footsteps, splashes, crickets. ------
-const unlockAudio = () => sfx.unlock()
+const unlockAudio = (e: Event) => {
+  if (!isTyping(e)) sfx.unlock()
+}
 window.addEventListener('keydown', unlockAudio)
 window.addEventListener('pointerdown', unlockAudio)
 document.addEventListener('touchstart', unlockAudio, { passive: true })
@@ -207,7 +212,14 @@ SOUND_PILL?.addEventListener('click', () => {
   sfx.toggle()
   refreshSoundPill()
 })
+// --- Music: the player's own Spotify (see spotify.ts). ------------------------
+const music = new Spotify()
+mountMusic(music)
+let musicDuck = 1
+
 window.addEventListener('keydown', (e) => {
+  if (isTyping(e)) return
+  if (e.key.toLowerCase() === 'p' && !e.repeat) music.togglePlay()
   if (e.key.toLowerCase() === 'm') {
     sfx.unlock()
     sfx.toggle()
@@ -299,7 +311,7 @@ function frame(now: number): void {
     steps++
   }
   if (accumulator >= STEP) accumulator = 0 // drop backlog instead of spiralling
-  player.interpolate(accumulator / STEP)
+  player.interpolate(accumulator / STEP, dt)
 
   dayNight.update()
   world.update(dt, player.pos, camera.position, dayNight, player.vel)
@@ -374,6 +386,9 @@ function frame(now: number): void {
     }
   }
   const swimmingNow = wasSwimming
+  // Music sits back a little while you swim, so the water comes forward.
+  musicDuck += ((swimmingNow ? 0.6 : 1) - musicDuck) * Math.min(1, dt * 1.5)
+  music.setDuck(musicDuck)
   const wading = !swimmingNow && world.water.surfaceAt(player.pos.x, player.pos.z) > player.pos.y + 0.03
   if (moving > 0.5 && player.sitMix < 0.1) {
     strideAcc += moving * dt

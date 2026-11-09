@@ -3,8 +3,7 @@ import { toonMat } from './toon'
 import { addShells, furMat, updateFur } from './fur'
 
 // ---------------------------------------------------------------------------
-// The player: a fluffy long-haired cream-and-ginger cat with a little red
-// scarf. Procedural shapes wrapped in shell fur (fur.ts) — a soft, wavy coat,
+// The player: a fluffy long-haired cream-and-ginger cat. Procedural shapes wrapped in shell fur (fur.ts) — a soft, wavy coat,
 // big chest ruff, cheek fluff and a plume tail.
 //
 // Motion is driven by what the body is actually doing (speed, turn rate,
@@ -30,14 +29,19 @@ import { addShells, furMat, updateFur } from './fur'
 
 export type AnimState = 'stand' | 'walk' | 'air' | 'sit'
 
+const _hip = new THREE.Vector3()
+const _home = new THREE.Vector3()
+const _land = new THREE.Vector3()
+const _t = new THREE.Vector3()
+
 /** Camera rig heights for a cat-sized player (eye, third-person look-at). */
 export const CAT_EYE_STAND = 0.92
 export const CAT_EYE_SIT = 0.78
 export const CAT_LOOK_AT = 0.62
 
-const BODY_Y = 0.5 // body centre above the paws
-const UPPER = 0.19
-const LOWER = 0.19
+const BODY_Y = 0.53 // body centre above the paws
+const UPPER = 0.23
+const LOWER = 0.26
 const TAIL_SEGS = 9
 
 /** Two-segment leg: hip/shoulder pivot → knee/elbow pivot → paw. */
@@ -45,6 +49,8 @@ class Leg {
   readonly root = new THREE.Group()
   readonly joint = new THREE.Group()
   constructor(radius: number, fur: THREE.Material, paw: THREE.Material) {
+    // Swing (x) in the leg's plane first, then splay that plane sideways (z).
+    this.root.rotation.order = 'ZYX'
     const upper = new THREE.Mesh(new THREE.CapsuleGeometry(radius, UPPER - radius, 4, 10), fur)
     upper.position.y = -UPPER / 2
     addShells(upper)
@@ -73,7 +79,26 @@ export class Cat {
   private front = new THREE.Group() // chest / head / forelegs (spine front half)
   private rear = new THREE.Group() // hind legs / tail (spine rear half)
   private eyes: THREE.Group[] = []
-  private legs: { leg: Leg; front: boolean; side: number; phase: number; idx: number }[] = []
+  private legs: {
+    leg: Leg
+    front: boolean
+    side: number
+    phase: number
+    idx: number
+    /** Where the paw is (world), where it lifted from, whether it's planted. */
+    foot: THREE.Vector3
+    from: THREE.Vector3
+    planted: boolean
+    /** Keyframed (non-IK) pose for sit / swim / air / idle actions. */
+    animHip: number
+    animKnee: number
+    /** > 0 while doing a catch-up step (counts down to 0). */
+    forceSwing: number
+  }[] = []
+  /** Height of whatever is underfoot at (x, z) — set by the Player. */
+  ground: (x: number, z: number) => number = () => 0
+  private ikW = 0
+  private feetReady = false
   private tail: THREE.Group[] = []
   private t = 0
   private squashY = 0
@@ -118,7 +143,6 @@ export class Cat {
     const legFur = furMat(0xf3b37c, 0.045, 100)
     const tailFur = furMat(0xf3b37c, 0.1, 55)
     const tailTip = furMat(0xfff6ea, 0.1, 55)
-    const scarf = toonMat({ color: 0xc43b3b }, 0xffc4b0, 0.3)
     const pink = toonMat({ color: 0xf2a0a8 })
 
     this.group.add(this.root)
@@ -216,18 +240,6 @@ export class Cat {
       }
     }
 
-    // Scarf: a soft wrap round the neck + two tails trailing back.
-    const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.05, 14, 32), scarf)
-    wrap.position.set(0, 0.14, 0.33)
-    wrap.rotation.set(Math.PI / 2 + 0.5, 0, 0)
-    this.body.add(wrap)
-    for (const side of [-1, 1]) {
-      const tailPiece = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.015, 0.2, 2, 1, 6), scarf)
-      tailPiece.position.set(side * 0.05, 0.26, 0.17)
-      tailPiece.rotation.set(0.5, side * 0.25, 0)
-      this.body.add(tailPiece)
-    }
-
     // Legs (shoulder/hip pivots under the torso).
     const legSpec: Array<[boolean, number, number]> = [
       [true, -1, 0], // front-left
@@ -239,7 +251,7 @@ export class Cat {
       const leg = new Leg(front ? 0.054 : 0.064, legFur, creamLeg)
       leg.root.position.set(side * 0.11, -0.04, front ? 0.27 : -0.26)
       this.body.add(leg.root)
-      this.legs.push({ leg, front, side, phase, idx: this.legs.length })
+      this.legs.push({ leg, front, side, phase, idx: this.legs.length, foot: new THREE.Vector3(), from: new THREE.Vector3(), planted: true, animHip: 0, animKnee: 0, forceSwing: 0 })
     }
 
     // Tail: a chain of tapering segments, each a child of the last.
@@ -282,6 +294,126 @@ export class Cat {
       }
     })
     document.getElementById('loader')?.remove()
+  }
+
+  /**
+   * Walking legs, the way animated animals do it: each paw is planted on the
+   * ground and stays put in the world while the body moves over it (no
+   * sliding), then lifts, folds, swings forward and lands ahead of the hip.
+   * Two-bone IK bends the elbow / hock to keep each paw where it belongs.
+   * Blends with the keyframed poses (sit, swim, air, grooming) by weight.
+   */
+  private plantFeet(dt: number, s: number, gph: number, duty: number, stride: number, trotW: number, gallopW: number, state: AnimState, sit: number, actW: number): void {
+    const lerp = THREE.MathUtils.lerp
+    const clamp = THREE.MathUtils.clamp
+    const want = state === 'air' ? 0 : (1 - sit) * (1 - this.swim)
+    this.ikW = lerp(this.ikW, want, 1 - Math.exp(-dt * 10))
+    this.group.updateMatrixWorld(true)
+    const yaw = this.group.rotation.y
+    const fx = Math.sin(yaw)
+    const fz = Math.cos(yaw)
+    const vx = this.vel.x
+    const vz = this.vel.z
+    const lift = lerp(lerp(0.05, 0.07, trotW), 0.11, gallopW)
+    const WALK = [Math.PI / 2, Math.PI * 1.5, 0, Math.PI]
+    const TROT = [0, Math.PI, Math.PI, 0]
+    const GALLOP = [0, 0.4, Math.PI, Math.PI + 0.4]
+    const moving = state === 'walk'
+    for (const L of this.legs) {
+      const { leg, idx } = L
+      // Home: under the hip (a touch outward), on the ground.
+      leg.root.getWorldPosition(_hip)
+      const sx = Math.cos(yaw) * L.side * 0.012
+      const sz = -Math.sin(yaw) * L.side * 0.012
+      _home.set(_hip.x + sx, 0, _hip.z + sz)
+      _home.y = this.ground(_home.x, _home.z)
+      if (!this.feetReady || L.foot.distanceToSquared(_home) > 1.5 * 1.5) {
+        L.foot.copy(_home)
+        L.from.copy(_home)
+        L.planted = true
+      }
+      if (moving) {
+        const off = lerp(lerp(WALK[idx], TROT[idx], trotW), GALLOP[idx], gallopW)
+        let ph = ((gph + off) / (Math.PI * 2)) % 1
+        if (ph < 0) ph += 1
+        // A planted paw left beyond reach (sharp turn, sudden start) steps now.
+        const reach = UPPER + LOWER
+        const stretched = L.planted && Math.hypot(L.foot.x - _hip.x, L.foot.y + 0.035 - _hip.y, L.foot.z - _hip.z) > reach * 1.02
+        if (stretched) L.forceSwing = 1
+        if (L.forceSwing > 0) {
+          // Quick catch-up step to just ahead of the hip.
+          if (L.planted) {
+            L.planted = false
+            L.from.copy(L.foot)
+            L.forceSwing = 1
+          }
+          L.forceSwing = Math.max(0, L.forceSwing - dt / 0.16)
+          const u = 1 - L.forceSwing
+          const sp = Math.max(s, 0.01)
+          _land.set(_home.x + (vx / sp) * 0.08, 0, _home.z + (vz / sp) * 0.08)
+          _land.y = this.ground(_land.x, _land.z)
+          L.foot.lerpVectors(L.from, _land, u * u * (3 - 2 * u))
+          L.foot.y += Math.sin(Math.PI * u) * lift
+          if (L.forceSwing === 0) {
+            L.planted = true
+            L.foot.y = _land.y
+          }
+        } else if (ph < duty) {
+          // Stance: planted. (Lands exactly where the swing put it.)
+          if (!L.planted) {
+            L.planted = true
+            L.foot.y = this.ground(L.foot.x, L.foot.z)
+          }
+        } else {
+          if (L.planted) {
+            L.planted = false
+            L.from.copy(L.foot)
+          }
+          // Swing: aim ahead of the hip by half the stance travel (along the
+          // actual motion, so turns and slopes work), arc up and over.
+          const u = (ph - duty) / (1 - duty)
+          const sp = Math.max(s, 0.01)
+          const ahead = (duty * stride) / 2
+          _land.set(_home.x + (vx / sp) * ahead, 0, _home.z + (vz / sp) * ahead)
+          _land.y = this.ground(_land.x, _land.z)
+          const e = u * u * (3 - 2 * u)
+          L.foot.lerpVectors(L.from, _land, e)
+          L.foot.y += Math.pow(Math.sin(Math.PI * u), 0.8) * lift
+        }
+      } else {
+        // Standing: settle any paw that's far from home with a little step.
+        const d = Math.hypot(L.foot.x - _home.x, L.foot.z - _home.z)
+        const k = 1 - Math.exp(-dt * 6)
+        L.foot.x += (_home.x - L.foot.x) * k
+        L.foot.z += (_home.z - L.foot.z) * k
+        L.foot.y = lerp(L.foot.y, _home.y + Math.min(d, 0.06) * 0.8, k)
+        L.planted = true
+      }
+      // Two-bone IK in the leg's plane (parent space of the hip).
+      _t.copy(L.foot)
+      _t.y += 0.035 // paw centre sits a paw-radius above the ground
+      leg.root.parent!.worldToLocal(_t)
+      const dx = _t.x - leg.root.position.x
+      const dy = _t.y - leg.root.position.y
+      const dzz = _t.z - leg.root.position.z
+      // Splay sideways (roll about z, applied before the swing about x), then
+      // solve the two bones in the leg's own plane.
+      const down = Math.hypot(dx, dy)
+      const splay = Math.atan2(dx, -dy)
+      const D = clamp(Math.hypot(down, dzz), 0.08, (UPPER + LOWER) * 0.995)
+      const a = Math.atan2(dzz, down) // forward angle of the paw from straight down
+      const alpha = Math.acos(clamp((UPPER * UPPER + D * D - LOWER * LOWER) / (2 * UPPER * D), -1, 1))
+      const gamma = Math.acos(clamp((UPPER * UPPER + LOWER * LOWER - D * D) / (2 * UPPER * LOWER), -1, 1))
+      // Elbow / hock point backwards: the upper bone swings back from the
+      // line to the paw, the lower bone folds forward.
+      const ikHip = -(a - alpha)
+      const ikKnee = -(Math.PI - gamma)
+      const w = this.ikW * (L.front ? 1 - actW : 1 - actW * 0.6)
+      leg.root.rotation.x = lerp(L.animHip, ikHip, w)
+      leg.root.rotation.z = lerp(0, splay, w)
+      leg.joint.rotation.x = lerp(L.animKnee, ikKnee, w)
+    }
+    this.feetReady = true
   }
 
   /** Player tells us when we're in deep water (body sinks to the waterline, legs paddle). */
@@ -333,10 +465,17 @@ export class Cat {
 
     // -- Gait: walk → trot → gallop by speed. Stride lengthens with speed,
     // so cadence rises gently instead of legs spinning.
-    const trotW = sstep(s, 2.0, 3.2)
-    const gallopW = sstep(s, 5.4, 6.8)
-    const stride = 0.5 + s * 0.15
-    if (moving) this.gaitPhase += ((Math.PI * 2 * s) / stride) * dt
+    const trotW = sstep(s, 1.6, 2.8)
+    const gallopW = sstep(s, 4.6, 6.4)
+    // Duty factor: the share of each cycle a paw is on the ground — long in
+    // a walk, half in a trot, short in a gallop (the body flies between).
+    const duty = lerp(lerp(0.64, 0.46, trotW), 0.24, gallopW)
+    // How far the body travels over one planted paw, limited by leg reach.
+    const travel = clamp(0.14 + s * 0.08, 0.14, 0.36)
+    const stride = travel / duty
+    // The gait clock runs on the actual ground speed (a smoothed one lags
+    // when setting off and leaves paws stranded behind the hips).
+    if (moving && this.swim < 0.5) this.gaitPhase += ((Math.PI * 2 * speed) / stride) * dt
     const gph = this.gaitPhase
     // Per-leg phase offsets [FL, FR, BL, BR] for each gait.
     const WALK = [Math.PI / 2, Math.PI * 1.5, 0, Math.PI]
@@ -422,7 +561,7 @@ export class Cat {
     }
 
     // Sit: chest up, haunches down. Swim: only head + back above water.
-    bodyY = lerp(bodyY, 0.36, sit)
+    bodyY = lerp(bodyY, 0.4, sit)
     bodyY = lerp(bodyY, 0.12 + Math.sin(this.t * 2.2) * 0.015, this.swim)
     headPitch = lerp(headPitch, -0.25, this.swim)
     pitch = lerp(pitch, -0.62, sit)
@@ -475,9 +614,11 @@ export class Cat {
       const paddle = Math.sin(this.t * 7 + this.legs[idx].phase)
       const swimHip = paddle * 0.7 + (front ? -0.4 : 0.5)
       const swimKnee = (front ? -0.6 : 0.6) + Math.max(0, paddle) * (front ? -0.6 : 0.6)
-      leg.root.rotation.x = lerp(leg.root.rotation.x, lerp(lerp(hip, sitHip, sit), swimHip, this.swim), ease)
-      leg.joint.rotation.x = lerp(leg.joint.rotation.x, lerp(lerp(knee, sitKnee, sit), swimKnee, this.swim), ease)
+      const L = this.legs[idx]
+      L.animHip = lerp(L.animHip, lerp(lerp(hip, sitHip, sit), swimHip, this.swim), ease)
+      L.animKnee = lerp(L.animKnee, lerp(lerp(knee, sitKnee, sit), swimKnee, this.swim), ease)
     }
+    this.plantFeet(dt, s, gph, duty, stride, trotW, gallopW, state, sit, act === 'groom' || act === 'stretch' ? aw : 0)
 
     // -- Tail: damped springs, stiff at the root and loose at the tip, so it
     // lags, swings out on turns and settles with a little overshoot.
@@ -488,7 +629,10 @@ export class Cat {
       const k = i / (n - 1)
       const wave = Math.sin(this.t * (moving ? 3.2 : 1.3) - i * 0.55)
       // Proud question-mark walking, low and straight galloping, lazy idle S.
-      let rx = i === 0 ? lerp(0.7, lerp(-0.9, -0.2, gallopW), moving) : lerp(-0.12, lerp(0.13, 0.02, gallopW), moving)
+      // Walking/trotting: carried high with a hook at the tip; galloping:
+      // streamed out behind for balance.
+      const hook = i >= n - 3 ? 0.22 : -0.05
+      let rx = i === 0 ? lerp(0.7, lerp(0.95, -0.2, gallopW), moving) : lerp(-0.12, lerp(hook, 0.02, gallopW), moving)
       let ry = wave * (moving ? 0.12 : 0.09) * (0.4 + k)
       ry += clamp(-turn * 0.06, -0.3, 0.3) * (0.4 + k) // swings outward on turns
       rx += clamp(v.y * 0.015, -0.15, 0.15) * k // flicks with jumps

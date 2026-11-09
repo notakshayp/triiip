@@ -226,7 +226,10 @@ export class GhibliWater {
           float open = openness(p);
           vOpen = open;
           // Amplitude: rolling in open, deep water; a ripple on ponds.
-          float amp = mix(0.03, 0.2, open) * smoothstep(0.0, 2.5, depth);
+          // Waves keep their size into the shallows (they bunch up there
+          // before breaking) and only die in the last half metre — fading
+          // them over 2.5 m left a glassy band right in front of the beach.
+          float amp = mix(0.03, 0.2, open) * smoothstep(0.0, 0.6, depth);
           // Fade waves out with distance (grid gets coarse; also calmer horizon).
           float camD = length(cameraPosition.xz - p);
           amp *= 1.0 - smoothstep(120.0, 260.0, camD);
@@ -350,7 +353,7 @@ export class GhibliWater {
           // -- Surface normal: big Gerstner swell (vertex) + procedural small
           // waves + the live ripple simulation.
           float fw = length(fwidth(p));
-          float chop = mix(0.1, 0.24, vOpen) * mix(0.45, 1.0, smoothstep(0.0, 0.8, depthAt(p)));
+          float chop = mix(0.12, 0.26, vOpen) * mix(0.6, 1.0, smoothstep(0.0, 0.25, depthAt(p)));
           vec2 slope = waveDetail(p, uTime, fw) * chop;
           vec2 ruv = (p - uRippleRect.xy) / uRippleRect.z;
           float wake = 0.0;
@@ -501,7 +504,7 @@ export class GhibliWater {
       0.2,
       1.6,
     )
-    const amp = THREE.MathUtils.lerp(0.03, 0.2, op) * THREE.MathUtils.smoothstep(depth, 0, 2.5)
+    const amp = THREE.MathUtils.lerp(0.03, 0.2, op) * THREE.MathUtils.smoothstep(depth, 0, 0.6)
     let y = 0
     for (const [dx, dz, wl, a] of WAVES) {
       const k = (Math.PI * 2) / wl

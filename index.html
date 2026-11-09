@@ -22,6 +22,7 @@
           <canvas id="spark" width="96" height="28" aria-hidden="true"></canvas>
           <span id="perf-text">— fps</span>
         </div>
+        <button id="music" class="pill" type="button" title="Music from your Spotify (P play/pause)"><span id="music-label">🎵</span></button>
         <button id="sound" class="pill" type="button" aria-pressed="true" title="Sound on/off (M)">🔊</button>
       </div>
     </header>
@@ -67,6 +68,53 @@
       <div class="dim small">Spiral-searches the real noise field for the nearest match and teleports you there.</div>
     </section>
 
+    <section id="music-panel" aria-label="Music" hidden>
+      <div class="time-row"><span>🎵 Music</span><span id="music-close" class="dim" role="button" tabindex="0">Close</span></div>
+
+      <div id="music-setup">
+        <p class="music-copy">Play your own Spotify while you wander. Needs <b>Spotify Premium</b>.</p>
+        <label class="music-field">
+          <span>Client ID</span>
+          <input id="music-client" type="text" spellcheck="false" autocomplete="off" placeholder="from developer.spotify.com" />
+        </label>
+        <button id="music-connect" class="music-primary" type="button">Connect Spotify</button>
+        <details class="music-help">
+          <summary>How to get a Client ID</summary>
+          <ol>
+            <li>Open <b>developer.spotify.com/dashboard</b> → Create app.</li>
+            <li>Tick <b>Web API</b> and <b>Web Playback SDK</b>.</li>
+            <li>Add this Redirect URI exactly:
+              <code id="music-redirect"></code>
+              <button id="music-copy" type="button">Copy</button></li>
+            <li>Under <b>User Management</b>, add your Spotify email.</li>
+            <li>Paste the app's Client ID above.</li>
+          </ol>
+          <p id="music-localhost" class="music-warn" hidden></p>
+        </details>
+      </div>
+
+      <div id="music-player" hidden>
+        <div class="music-now">
+          <img id="music-art" alt="" width="52" height="52" />
+          <div class="music-meta">
+            <div id="music-title" class="music-title">Ready</div>
+            <div id="music-artist" class="dim">Pick a playlist below</div>
+          </div>
+        </div>
+        <div class="music-bar"><div id="music-progress"></div></div>
+        <div class="music-controls">
+          <button id="music-prev" type="button" aria-label="Previous">⏮</button>
+          <button id="music-toggle" type="button" aria-label="Play / pause">▶</button>
+          <button id="music-next" type="button" aria-label="Next">⏭</button>
+          <input id="music-volume" type="range" min="0" max="1" step="0.01" aria-label="Music volume" />
+        </div>
+        <div id="music-lists" class="music-lists"></div>
+        <div class="music-foot dim"><span id="music-user"></span><span id="music-logout" role="button" tabindex="0">Disconnect</span></div>
+      </div>
+
+      <p id="music-msg" class="music-msg" hidden></p>
+    </section>
+
     <section id="help" aria-label="Controls">
       <button id="help-toggle" aria-expanded="true" aria-controls="help-body">
         <span>🎮 Controls</span>
@@ -85,6 +133,7 @@
         <div class="row"><kbd>C</kbd><span class="key-note">sit · hop up onto rocks / logs</span></div>
         <div class="row"><kbd>V</kbd><span class="key-note">3rd ⇄ 1st person</span></div>
         <div class="row"><kbd>M</kbd><span class="key-note">sound on/off</span></div>
+        <div class="row"><kbd>P</kbd><span class="key-note">Spotify play / pause (🎵 to connect)</span></div>
         <div class="help-group">World &amp; time</div>
         <div class="row"><kbd>T</kbd><span class="key-note">time speed · <kbd>[</kbd><kbd>]</kbd> ±1h</span></div>
         <div class="row"><kbd>🖱 Clock</kbd><span class="key-note">click to scrub the sky</span></div>

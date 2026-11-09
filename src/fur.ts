@@ -102,19 +102,28 @@ export function furMat(color: number, len: number, density = 260): THREE.MeshLam
         'vec4 diffuseColor = vec4( diffuse, opacity );',
         `vec4 diffuseColor = vec4( diffuse, opacity );
         float furAO = 1.0;
+        float tipT = 0.0;
         if (vLayer > 0.0) {
-          // Clumps: soft tufts of similar length that curl together.
-          float clump = furNoise(vFurP * uDensity * 0.12);
-          vec3 q = vFurP * uDensity;
+          // Fluffy, not spiky: strand length is set by the soft tuft it
+          // belongs to (round-topped clumps, a smooth silhouette) rather than
+          // per strand; strands are round-tipped, not needles; and the inner
+          // third is a dense undercoat with no gaps at all.
+          float clump = furNoise(vFurP * uDensity * 0.1);
+          float clump2 = furNoise(vFurP * uDensity * 0.33 + 7.0);
+          vec3 q = vFurP * uDensity * 1.35;
           q += vec3(sin(vLayer * 4.0 + clump * 6.28), cos(vLayer * 3.0 + clump * 6.28), sin(vLayer * 3.5)) * vLayer * 0.9; // wavy
           vec3 cell = floor(q);
           float h = furHash(cell);
-          float strandLen = mix(0.6, 1.0, h) * mix(0.6, 1.0, clump);
+          float strandLen = mix(0.88, 1.0, h) * mix(0.5, 1.0, smoothstep(0.15, 0.85, clump * 0.7 + clump2 * 0.3));
           float t = vLayer / strandLen;
           float d = length(fract(q) - 0.5);
-          if (t > 1.0 || d > 0.7 * (1.0 - t * 0.8)) discard;
+          if (t > 1.0) discard;
+          if (vLayer > 0.3 && d > 0.66 * (1.0 - t * t * 0.55)) discard;
+          tipT = t;
         }
-        furAO = mix(0.8, 1.06, vLayer);
+        furAO = mix(0.86, 1.04, vLayer);
+        // Tips catch more light than the roots: a soft, airy outer coat.
+        diffuseColor.rgb *= 1.0 + tipT * 0.12;
         diffuseColor.rgb *= furAO;`,
       )
       .replace(
