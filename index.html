@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0b1020" />
+    <title>Chill Valley — infinite meadows</title>
+    <meta name="description" content="A chill, infinitely procedurally generated Studio-Ghibli grassland. Wander it as a cat, free to roam, with lakes, wind-swept grass and a synced day/night cycle." />
+  </head>
+  <body>
+    <canvas id="game" aria-label="3D open world"></canvas>
+    <div id="vignette" aria-hidden="true"></div>
+
+    <header id="hud-top">
+      <div class="title">🌿 Chill Valley <span>infinite meadows</span></div>
+      <div class="hud-right">
+        <button id="clock" class="pill mono" type="button" title="Click to switch time of day">—:—</button>
+        <button id="biome-toggle" class="pill mono" type="button" title="Jump between biomes (B)">🧭 meadow</button>
+        <div id="mode" class="pill" title="Press V to switch">3rd person</div>
+        <div id="coords" class="pill mono" title="World position (infinite world)">x 0 · z 8</div>
+        <div id="perf" class="pill mono" title="FPS · draw calls / triangles · JS heap (Chrome)">
+          <canvas id="spark" width="96" height="28" aria-hidden="true"></canvas>
+          <span id="perf-text">— fps</span>
+        </div>
+        <button id="sound" class="pill" type="button" aria-pressed="true" title="Sound on/off (M)">🔊</button>
+      </div>
+    </header>
+
+    <div id="loader" role="status">
+      <div class="loader-inner">
+        <div class="loader-sun" aria-hidden="true"></div>
+        <h1>Chill Valley</h1>
+        <p>growing the meadow…</p>
+      </div>
+    </div>
+
+    <section id="time-panel" aria-label="Time of day" hidden>
+      <div class="time-row"><span>⏱ Time</span><span id="time-speed" class="dim">1× live</span></div>
+      <input id="time-slider" type="range" min="0" max="24" step="0.1" value="12" aria-label="Time of day" />
+      <div class="time-ticks"><span>12am</span><span>6am</span><span>noon</span><span>6pm</span><span>12am</span></div>
+      <div class="time-presets">
+        <button type="button" data-hour="6.5">🌅 Dawn</button>
+        <button type="button" data-hour="12">☀️ Noon</button>
+        <button type="button" data-hour="17.8">🌇 Dusk</button>
+        <button type="button" data-hour="23.5">🌙 Night</button>
+      </div>
+      <div class="time-row">
+        <button id="time-sync" type="button">Sync to my clock</button>
+        <button id="time-close" type="button">Close</button>
+      </div>
+      <div class="dim small">Tip: press <kbd>T</kbd> to speed up, <kbd>[</kbd> / <kbd>]</kbd> to nudge ±1h.</div>
+    </section>
+
+    <section id="biome-panel" aria-label="Biome switcher" hidden>
+      <div class="time-row"><span>🧭 Biome</span><span id="biome-close" class="dim" role="button" tabindex="0">Close</span></div>
+      <div class="time-presets biome-grid">
+        <button type="button" data-biome="meadow">🌾 Meadow</button>
+        <button type="button" data-biome="tallgrass">🌿 Tallgrass</button>
+        <button type="button" data-biome="clearing">🟡 Clearing</button>
+        <button type="button" data-biome="forest">🌲 Forest</button>
+        <button type="button" data-biome="desert">🏜 Desert</button>
+        <button type="button" data-biome="beach">🏖 Beach</button>
+        <button type="button" data-biome="ocean">🌊 Ocean</button>
+        <button type="button" data-biome="lake">🏞 Lake</button>
+        <button type="button" data-biome="rock">🪨 Rock</button>
+      </div>
+      <div class="dim small">Spiral-searches the real noise field for the nearest match and teleports you there.</div>
+    </section>
+
+    <section id="help" aria-label="Controls">
+      <button id="help-toggle" aria-expanded="true" aria-controls="help-body">
+        <span>🎮 Controls</span>
+        <span class="help-btns">
+          <span class="chev" aria-hidden="true">▾</span>
+          <span id="help-min" title="Minimize" role="button" aria-label="Minimize controls">–</span>
+        </span>
+      </button>
+      <div id="help-body">
+        <div class="help-group">Move &amp; camera</div>
+        <div class="row"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span class="key-note">trot · steer</span></div>
+        <div class="row"><kbd>Shift</kbd><span class="key-note">gallop</span></div>
+        <div class="row"><kbd>Space</kbd><span class="key-note">jump · hop out of water</span></div>
+        <div class="row"><kbd>Drag</kbd><span class="key-note">look · wheel zooms (3rd person)</span></div>
+        <div class="help-group">Hang out</div>
+        <div class="row"><kbd>C</kbd><span class="key-note">sit · hop up onto rocks / logs</span></div>
+        <div class="row"><kbd>V</kbd><span class="key-note">3rd ⇄ 1st person</span></div>
+        <div class="row"><kbd>M</kbd><span class="key-note">sound on/off</span></div>
+        <div class="help-group">World &amp; time</div>
+        <div class="row"><kbd>T</kbd><span class="key-note">time speed · <kbd>[</kbd><kbd>]</kbd> ±1h</span></div>
+        <div class="row"><kbd>🖱 Clock</kbd><span class="key-note">click to scrub the sky</span></div>
+        <div class="row"><kbd>B</kbd><span class="key-note">jump between biomes</span></div>
+        <div class="help-foot">Find the blue water: lakes + a winding river. You can swim. ✨</div>
+      </div>
+    </section>
+
+    <button id="help-fab" type="button" hidden title="Show controls">🎮</button>
+
+    <div id="prompt" role="status">Press C to sit</div>
+    <div id="lock-hint">🖱 Click to look around</div>
+
+    <div id="touch-ui" hidden>
+      <div id="joystick" aria-hidden="true"><div id="stick"></div></div>
+      <div id="touch-actions">
+        <button id="btn-view" type="button">View</button>
+        <button id="btn-jump" type="button">Jump</button>
+        <button id="btn-sit" type="button">Sit</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
